@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch vs. Network — a PyTorch model in your browser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+<style>
+  :root {
+    --paper: #f6f8fb;
+    --grid: #dbe5f4;
+    --ink: #16213d;
+    --pen: #2b52e0;
+    --muted: #7c8698;
+    --card: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    line-height: 1.5;
+  }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 40px 20px 56px;
+  }
+  h1 {
+    font-size: clamp(1.6rem, 4vw, 2.3rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 6px;
+  }
+  .sub {
+    color: var(--muted);
+    margin: 0 0 18px;
+    max-width: 52ch;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    margin: 0 0 28px;
+    padding: 0;
+    list-style: none;
+  }
+  .chips li {
+    font-size: 0.82rem;
+    padding: 3px 10px;
+    border: 1px solid var(--grid);
+    border-radius: 999px;
+    background: var(--card);
+    color: var(--muted);
+  }
+  .chips li.lit { color: var(--pen); border-color: var(--pen); }
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(260px, 340px) 1fr;
+    gap: 32px;
+    align-items: start;
+  }
+  .easel { position: relative; min-width: 0; }
+  canvas {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+      var(--card);
+    background-size: 20px 20px;
+    border: 1px solid var(--grid);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(22, 33, 61, 0.08);
+    cursor: crosshair;
+    touch-action: none;
+  }
+  .hint {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-family: Caveat, cursive;
+    font-size: 1.9rem;
+    color: var(--muted);
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .hint.gone { opacity: 0; }
+  .tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  button {
+    font: 500 0.9rem "Space Grotesk", sans-serif;
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--grid);
+    border-radius: 8px;
+    padding: 7px 16px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--pen); color: var(--pen); }
+  button:focus-visible, canvas:focus-visible {
+    outline: 2px solid var(--pen);
+    outline-offset: 2px;
+  }
+  .status {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .verdict {
+    font-family: Caveat, cursive;
+    font-size: clamp(2.2rem, 5vw, 3.2rem);
+    font-weight: 600;
+    color: var(--pen);
+    min-height: 1.3em;
+    line-height: 1.2;
+    margin: 0 0 14px;
+  }
+  .guesses { display: grid; gap: 9px; }
+  .guess {
+    display: grid;
+    grid-template-columns: 82px 1fr 58px;
+    gap: 10px;
+    align-items: center;
+    font-size: 0.88rem;
+  }
+  .guess .name { color: var(--muted); }
+  .guess.top .name { color: var(--ink); font-weight: 500; }
+  .track {
+    height: 8px;
+    background: var(--card);
+    border: 1px solid var(--grid);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    width: 0%;
+    background: var(--grid);
+    border-radius: 999px;
+    transition: width 0.25s ease, background 0.25s ease;
+  }
+  .guess.top .fill { background: var(--pen); }
+  .pct {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  footer {
+    margin-top: 44px;
+    padding-top: 16px;
+    border-top: 1px solid var(--grid);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  @media (max-width: 640px) {
+    .stage { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fill, .hint { transition: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Draw something. The network guesses.</h1>
+  <p class="sub">A convolutional net I trained in PyTorch on 120,000 QuickDraw
+  doodles, exported to ONNX and running entirely in your browser — no server,
+  your sketch never leaves this page.</p>
+  <ul class="chips" id="chips" aria-label="Things the network knows"></ul>
+
+  <div class="stage">
+    <div class="easel">
+      <canvas id="pad" width="280" height="280" aria-label="Drawing area" tabindex="0"></canvas>
+      <div class="hint" id="hint">draw here ~</div>
+      <div class="tools">
+        <button id="clear" type="button">Clear</button>
+        <span class="status" id="status">warming up the network…</span>
+      </div>
+    </div>
+    <div>
+      <p class="verdict" id="verdict" aria-live="polite">&nbsp;</p>
+      <div class="guesses" id="guesses"></div>
+    </div>
+  </div>
+
+  <footer>pytorch → onnx → onnxruntime-web · 422k params · 1.7 MB ·
+  inference on your CPU via WebAssembly</footer>
+</main>
+
+<script>
+(async () => {
+  const $ = id => document.getElementById(id);
+  const canvas = $("pad"), ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  // Crisp strokes on retina: internal resolution = CSS size × devicePixelRatio.
+  const cssSize = canvas.getBoundingClientRect().width;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.height = Math.round(cssSize * dpr);
+  ctx.scale(dpr, dpr);
+  ctx.lineWidth = cssSize / 18;           // ~2px after downscale to 28px, like the dataset
+  ctx.lineCap = ctx.lineJoin = "round";
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--ink");
+
+  // --- model ---
+  let session = null, classes = [];
+  try {
+    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
+    [session, classes] = await Promise.all([
+      ort.InferenceSession.create("model.onnx"),
+      fetch("classes.json").then(r => r.json()),
+    ]);
+    $("status").textContent = "ready — it guesses while you draw";
+  } catch (e) {
+    $("status").textContent = "model failed to load — run train.py and serve over http";
+    console.error(e);
+    return;
+  }
+
+  // one chip + one probability row per class
+  for (const c of classes) {
+    $("chips").insertAdjacentHTML("beforeend", `<li data-c="${c}">${c}</li>`);
+    $("guesses").insertAdjacentHTML("beforeend",
+      `<div class="guess" data-c="${c}">
+         <span class="name">${c}</span>
+         <div class="track"><div class="fill"></div></div>
+         <span class="pct">–</span>
+       </div>`);
+  }
+
+  // --- drawing ---
+  let drawing = false, hasInk = false;
+  const pos = e => {
+    const r = canvas.getBoundingClientRect();
+    const s = cssSize / r.width;         // stay accurate if the layout resizes
+    return [(e.clientX - r.left) * s, (e.clientY - r.top) * s];
+  };
+  canvas.addEventListener("pointerdown", e => {
+    drawing = true;
+    canvas.setPointerCapture(e.pointerId);
+    ctx.beginPath();
+    ctx.moveTo(...pos(e));
+    ctx.lineTo(...pos(e));               // a dot counts as a stroke
+    ctx.stroke();
+    hasInk = true;
+    $("hint").classList.add("gone");
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (!drawing) return;
+    ctx.lineTo(...pos(e));
+    ctx.stroke();
+    predictSoon();
+  });
+  canvas.addEventListener("pointerup", () => { drawing = false; predictSoon(); });
+  $("clear").addEventListener("click", () => {
+    ctx.clearRect(0, 0, cssSize, cssSize);
+    hasInk = false;
+    $("hint").classList.remove("gone");
+    $("verdict").innerHTML = "&nbsp;";
+    document.querySelectorAll(".guess").forEach(g => {
+      g.classList.remove("top");
+      g.querySelector(".fill").style.width = "0%";
+      g.querySelector(".pct").textContent = "–";
+    });
+    document.querySelectorAll(".chips li").forEach(c => c.classList.remove("lit"));
+  });
+
+  // --- preprocessing: crop the ink's bounding box, center it in 28×28 ---
+  // The dataset is white-on-black; the stroke alpha channel gives us exactly
+  // that for free, antialiasing included.
+  function toTensor() {
+    const { width: w, height: h } = canvas;
+    const a = ctx.getImageData(0, 0, w, h).data;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++)
+        if (a[(y * w + x) * 4 + 3] > 10) {
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+    if (x1 < x0) return null;            // blank canvas
+    const side = Math.max(x1 - x0, y1 - y0) * 1.2 + 2;
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const off = new OffscreenCanvas(28, 28), octx = off.getContext("2d");
+    octx.drawImage(canvas, cx - side / 2, cy - side / 2, side, side, 0, 0, 28, 28);
+    const pix = octx.getImageData(0, 0, 28, 28).data;
+    const t = new Float32Array(784);
+    for (let i = 0; i < 784; i++) t[i] = pix[i * 4 + 3] / 255;
+    return new ort.Tensor("float32", t, [1, 1, 28, 28]);
+  }
+
+  // --- live prediction, throttled so we never queue up inference calls ---
+  let busy = false, again = false;
+  async function predict() {
+    if (busy) { again = true; return; }
+    busy = true;
+    const input = toTensor();
+    if (input) {
+      const { logits } = await session.run({ pixels: input });
+      const exp = Array.from(logits.data, Math.exp);
+      const sum = exp.reduce((s, v) => s + v, 0);
+      const probs = exp.map(v => v / sum);
+      render(probs);
+    }
+    busy = false;
+    if (again) { again = false; predict(); }
+  }
+  const predictSoon = () => requestAnimationFrame(predict);
+
+  function render(probs) {
+    const best = probs.indexOf(Math.max(...probs));
+    classes.forEach((c, i) => {
+      const row = document.querySelector(`.guess[data-c="${c}"]`);
+      row.classList.toggle("top", i === best);
+      row.querySelector(".fill").style.width = (probs[i] * 100).toFixed(1) + "%";
+      row.querySelector(".pct").textContent = (probs[i] * 100).toFixed(1) + "%";
+      document.querySelector(`.chips li[data-c="${c}"]`)
+        .classList.toggle("lit", i === best);
+    });
+    const p = probs[best], c = classes[best];
+    $("verdict").textContent =
+      p > 0.6 ? `${c}!` : p > 0.35 ? `${c}?` : "hmm…";
+  }
+})();
+</script>
+</body>
+</html>
