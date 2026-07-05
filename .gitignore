@@ -1,7 +1,0 @@
-# generated markdown docs (learning/ is written by Claude alongside the code)
-learning/
-
-# training data cache (re-downloaded by train.py)
-data/
-
-.DS_Store
